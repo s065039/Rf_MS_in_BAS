@@ -1,0 +1,244 @@
+---
+title: "Allele Frequency_RfMS_SNP"
+author: "Seungmo Kim"
+date: "9/18/2017"
+output:
+  html_document:
+    keep_md: true
+---
+
+
+#for plotting SNPs of S95 & S96 BSA plants
+#for clean-up
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(caTools) #Could also try using IRanges or zoo packages
+#install.packages("Biostrings")
+#library(Biostrings)
+library(plyr)
+library(reshape2)
+```
+
+##### read .vcf file and give it column names from header
+```{r}
+data <- read.delim("S95S96_filtered.vcf.recode.vcf", stringsAsFactors = FALSE, comment.char = "#", header=FALSE)
+
+colnames(data) <- unlist(
+  strsplit(
+    sub("#","",system("zgrep '^#[A-Z,a-z]' S95S96_filtered.vcf.recode.vcf", intern = TRUE)),
+    split = "\t")
+  )
+
+head(data)
+tail(data)
+names(data)
+```
+##### to break up the data in the final two columns and give them names( 9 columns, not 7)
+```{r}
+data$S95[is.na(data$S95)] <- "NA:NA:NA:NA:NA:NA:NA:NA:NA"
+ 
+S95.tmp <- matrix(
+  unlist(strsplit(data$S95,split = ":")),
+  nrow=nrow(data),
+  byrow=TRUE
+  )
+head(S95.tmp)
+
+colnames(S95.tmp) <- paste("S95",c("gt","gtQ","read.depth", "dpr","ref.depth","ref.qual","alt.depth","alt.qual","gt.like"),sep="_")
+
+
+data$S96[is.na(data$S96)] <- "NA:NA:NA:NA:NA:NA:NA:NA:NA"
+ 
+S96.tmp <- matrix(
+  unlist(strsplit(data$S96,split = ":")),
+  nrow=nrow(data),
+  byrow=TRUE
+  )
+head(S96.tmp)
+
+colnames(S96.tmp) <- paste("S96",c("gt","gtQ","read.depth", "dpr","ref.depth","ref.qual","alt.depth","alt.qual","gt.like"),sep="_")
+
+#gt: the most probable genotype. 1/1 is homozygous alternate; 0/0 is homozygous reference; 0/1 is heterozygous.
+#gtQ: Genotype Quality, the Phred-scaled marginal probability of the called genotype 
+#read_depth
+#dpr: Number of observation for each allele 
+#ref.depth: Reference allele observation count 
+#ref.qual: Sum of quality of the reference observations 
+#alt.depth: Alternate allele observation count 
+#alt.qual: Sum of quality of the alternate observations 
+#gt.like: Genotype Likelihood, log10-scaled likelihoods of the data given the called genotype for each possible genotype generated from the reference and alternate alleles given the sample ploidy 
+
+data <- cbind(data,S95.tmp,S96.tmp,stringsAsFactors=FALSE)
+summary(data)
+```
+
+##### conver the columns into numeric
+```{r}
+head(data)
+
+#"gt","gtQ","read_depth", #"dpr","ref.depth","ref.qual","alt.depth","alt.qual","gt.like"
+
+data[,c("S95_gtQ", "S95_read.depth","S95_ref.depth","S95_ref.qual","S95_alt.depth","S95_alt.qual","S96_gtQ", "S96_read.depth","S96_ref.depth","S96_ref.qual","S96_alt.depth","S96_alt.qual")] <- apply(data[,c("S95_gtQ","S95_read.depth","S95_ref.depth","S95_ref.qual","S95_alt.depth","S95_alt.qual", "S96_read.depth","S96_gtQ","S96_ref.depth","S96_ref.qual","S96_alt.depth","S96_alt.qual")], 2, as.numeric)
+head(data)
+summary(data)
+```
+
+##### add % of alternate alleles
+```{r}
+data <- data %>%
+   mutate(S95_percent.alt=S95_alt.depth/S95_read.depth*100, S96_percent.alt=S96_alt.depth/S96_read.depth*100, QUAL_converted =(10)*log10(QUAL))
+head(data)
+```
+
+# check out genotype quality values before filtering
+```{r}
+qplot(data$QUAL, geom="histogram") 
+qplot(data$QUAL, geom="histogram") + xlim(0,10000)
+summary(data$QUAL)
+
+qplot(data$QUAL_converted, geom="histogram") 
+summary(data$QUAL_converted)
+```
+
+
+
+#filter data to reduce to relevant SNPs
+
+#S95 & S96 coverage
+```{r}
+summary(data$S96_read.depth)
+qplot(data$S96_read.depth,geom="histogram") + scale_x_log10()
+qplot(data$S96_read.depth,geom="histogram") + xlim(0,100)
+
+summary(data$S95_read.depth)
+qplot(data$S95_read.depth,geom="histogram") + scale_x_log10()
+qplot(data$S95_read.depth,geom="histogram") + xlim(0,100)
+
+
+
+data.small <- data[data$S95_read.depth > 0 & data$S95_read.depth < 100 ,] 
+data.small <- data.small[data.small$S96_read.depth > 0 & data.small$S96_read.depth < 100 ,] 
+#return only 0 < read depth < 200 in both S95 & S96
+```
+
+```{r}
+data.small <- data.small[grepl("1/1",data.small$S96_gt),] #Focus on places where S96 is homozygous different from S95
+data.small <- data.small[grepl("0/0",data.small$S95_gt),] #return genotype 1/1 in S96 & 0/0 in S95 of SNPs
+# -> 454 observations only!
+qplot(data.small$S96_percent.alt,geom="histogram")
+
+data.small <- data.small[data.small$S96_percent.alt>90,] #focus on SNPs where we are confident that S96 is different from S95 -> 39 obervations only!
+summary(data.small)
+```
+
+#checkout the quality
+```{r}
+summary(data.small$QUAL)
+qplot(data.small$QUAL,geom="histogram") 
+
+summary(data.small$QUAL_converted)
+qplot(data.small$QUAL_converted,geom="histogram") 
+```
+
+#instead of using a smoothed line, compute running average.  The reason is that 
+#smoothed lines are overly influenced by the SNP density
+```{r}
+data.small$S96.percent.run10 <- caTools::runmean(data.small$S96_percent.alt,10)
+#data.small$S96.percent.run15 <- caTools::runmean(data.small$S96.percent.alt,15)
+
+#data.small <- data.small[data.small$CHROM!="SL2.40ch00",]
+```
+
+
+##plot 
+```{r}
+plotSnp <- function(start=NULL,finish=NULL,data=data.small,title=NULL,alpha=0.5,chrom=NULL) {
+  if(! is.null(chrom)) {
+    data <- data[data.small$CHROM==chrom,]
+  }
+  pl <- ggplot(data=data,mapping=aes(x=POS/1e6))
+  pl <- pl + geom_point(aes(y=S96_percent.alt),alpha=alpha)
+  if(!is.null(start) & ! is.null(finish)) {
+    pl <- pl + xlim(c(start,finish))
+    #pl <- pl + scale_size_discrete(range=c(2,6))
+  }
+  if(!is.null(title)) {
+    pl <- pl + ggtitle(title)
+  }
+  if(is.null(chrom)) {
+    pl <- pl + facet_wrap(~ CHROM, ncol = 2)
+    #pl <- pl + geom_smooth(aes(y=S96_percent.alt),color="skyblue",lwd=1) + ylim(0,100)
+}
+  pl <- pl + ylab("Percent S96") + xlab("Position (Mbp)")
+  pl <- pl + theme_bw()
+  pl <- pl + theme(axis.text = element_text(size=10))
+  pl <- pl + theme(axis.title = element_text(size=12))
+  print(pl)
+}
+```
+
+```{r}
+plotSnp(title="Rf and MS BSA Analysis")
+ggsave("Rf_MS_BSA_All_Chroms.pdf",height=11,width=8.5)
+ggsave("Rf_MS_BSA_All_Chroms.tiff",height=10,width=6.6)
+#possibly  chrC09, chrC03 and chrA05!
+
+plotSnp(title="Rf_MS_BSA Analysis ChrC09",chrom="chrC09") #possibly 47.1-47.7
+ggsave("Rf_MS_BSA_Ch09.pdf",width=8.5,height=2)
+
+plotSnp(47.49,47.51,title="ChrC09 Enlargement1",chrom="chrC09") #possibly 47.49-47.51
+ggsave("Rf_MS_BSA_chrC09_enlargement1.pdf",width=8.5,height=2)
+
+plotSnp(47.48,47.50,title="ChrC09 Enlargement2",chrom="chrC09") #possibly 47.48-47.50 & 47.2-47.24
+ggsave("Rf_MS_BSA_chrC09_enlargement2.pdf",width=8.5,height=2)
+
+```
+
+#get nearby genes.?????? not done yet!!
+```{r}
+installed.packages("rtracklayer")
+library(rtracklayer)
+installed.packages("GenomicRanges")
+library(GenomicRanges)
+library(IRanges)
+library(stringr)
+```
+#unfortunately there are errors in the ITAG2.3 file so I can't use import.gff3()
+```{r}
+genes <- read.delim("Brassica_napus.annotation_v5_modified_modified.gff3", sep="\t", comment.char="#", as.is=T,header=F)
+
+head(genes)
+
+colnames(genes) <- c("seqid","source","type","start","end","score","strand","phase","attributes")
+head(genes)
+
+genes <- genes[genes$type=="gene",]
+
+genes$locus <- regmatches(genes$attributes,regexpr("Solyc[01][0-9]g[0-9]{6}",genes$attributes))
+
+head(genes)
+
+genes.rd <- RangedData(IRanges(start=genes$start, end=genes$end, names=genes$locus),space=genes$seqid)
+
+head(genes.rd)
+
+#make it a ranged data object
+
+region1.rd <- RangedData(IRanges(start=3.45e07,end=3.55e07,names="tie1Region1"),space="SL2.40ch02")
+region1.rd
+
+region2.rd <- RangedData(IRanges(start=3.85e07,end=3.95e07,names="tie1Region2"),space="SL2.40ch02")
+
+overlaps1 <- as.data.frame(as.matrix(findOverlaps(ranges(region1.rd),ranges(genes.rd))))
+
+head(overlaps1)
+overlaps2 <- as.data.frame(as.matrix(findOverlaps(ranges(region2.rd),ranges(genes.rd))))
+
+overlaps1$locus <- genes$locus[overlaps1$subjectHits]
+
+overlaps2$locus <- genes$locus[overlaps2$subjectHits]
+
+write.csv(overlaps1,"tie1Overlaps1.csv")
+write.csv(overlaps2,"tie1Overlaps2.csv")
+```
