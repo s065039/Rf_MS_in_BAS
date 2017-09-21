@@ -89,19 +89,50 @@ plC
 
 plot one per chromosome
 ```{r}
-plAll.data <- pl.data2  %>% filter(!str_detect(CHROM,"random")) 
+chrom.names <- unique(pl.data2$CHROM) %>% str_subset("[0-9]$")
+chrom.names
 ```
 
 ```{r}
-for (chr in unique(plAll.data$CHROM)) {
-  plAll.data %>% filter(str_detect(CHROM,chr)) %>%
+for (chr in chrom.names) {
+  pl.data2 %>% filter(str_detect(CHROM,chr)) %>%
     ggplot(aes(x=POS,y=AF_100,color=population)) +
     geom_line() +
     ggtitle(chr) +
     ylim(0,1)
-  ggsave(str_c(chr,".png"))
+  ggsave(str_c(chr,".png"),height = 8, width = 12)
 }
-  
 ```
 
+
+## absolute difference in allele frequency
+
+```{r}
+data3 <- data2 %>%
+  group_by(CHROM) %>%
+  mutate(abs_delta_af = abs(S95_AO/S95_DP - S96_AO/S96_DP),
+         abs_delta_af_100=roll_mean(abs_delta_af,n=100,fill=NaN),
+         abs_delta_af_500=roll_mean(abs_delta_af,n=500,fill=NaN)
+         )
+data3
+```
+
+plot one per chromosome
+
+```{r}
+for (chr in chrom.names) {
+  data3 %>% filter(str_detect(CHROM,chr)) %>%
+    ggplot(aes(x=POS,y=abs_delta_af_100)) +
+    geom_line() +
+    ggtitle(chr) +
+    ylim(0,1)
+  ggsave(str_c("Delta_af",chr,".png"),height = 8, width = 12)
+}
+```
+
+```{r}
+ggplot(data3, aes(x=S95_DP)) + geom_histogram()
+ggplot(data3, aes(x=S96_DP)) + geom_histogram()
+
+```
 
