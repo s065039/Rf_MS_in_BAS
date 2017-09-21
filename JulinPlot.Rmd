@@ -1,0 +1,107 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(vcfR)
+library(stringr)
+library(RcppRoll)
+```
+
+```{r}
+cnames <- str_split("CHROM  POS     ID      REF     ALT     QUAL    FILTER  INFO    FORMAT  S95     S96",pattern=boundary("word"))[[1]]
+
+
+data <- read_tsv("S95S96_filtered.vcf.recode.vcf",comment="#",col_names = cnames)
+data
+```
+
+```{r}
+format.names <- str_split(data$FORMAT[[1]],pattern=":")[[1]]
+
+data2 <- data %>%
+  select(-INFO,-ID,-FILTER, -FORMAT) %>%
+  mutate(S95=str_replace_all(S95,"([^0-9]|$)\\.","\\1NA")) %>% # convert missing data "." into NA
+  mutate(S96=str_replace_all(S96,"([^0-9]|$)\\.","\\1NA")) %>%
+  separate(S95,sep=":",into = str_c("S95_",format.names), convert = TRUE) %>%
+  separate(S96,sep=":",into=str_c("S96_",format.names), convert = TRUE) %>%
+  filter(!(S95_GT=="1/1" & S96_GT=="1/1")) %>%
+  filter(!(S95_GT=="0/0" & S96_GT=="0/0")) %>%
+  select(-ends_with("DPR"))
+
+data2
+```
+
+
+
+calculate allele frequencies and polarize based on S95
+for each SNP 
+```{r}
+data2 <- data2 %>%
+  mutate(S95_alt_AF=S95_AO/S95_DP,
+         S96_alt_AF=S96_AO/S96_DP,
+         S95_alt_major=S95_alt_AF > 0.5)
+data2 <- data2 %>%
+  mutate(S95_AF_polar=ifelse(S95_alt_major,S95_alt_AF,1-S95_alt_AF),
+         S96_AF_polar=ifelse(S95_alt_major,S96_alt_AF,1-S96_alt_AF))
+data2         
+```
+
+rolling mean
+```{r}
+pl.data2 <- data2 %>%
+  gather(key="population",value="allele.frequency",S95_AF_polar,S96_AF_polar) %>%
+  arrange(CHROM,POS) %>%
+  group_by(population,CHROM) %>%
+  mutate(AF_100=roll_mean(allele.frequency,n=100,fill=NaN))
+pl.data2
+```
+
+
+plot!
+```{r}
+plA.data <- pl.data2 %>% filter(str_detect(CHROM,"chrA"),!str_detect(CHROM,"random")) 
+```
+
+```{r}
+plA <- ggplot(plA.data,aes(x=POS,y=AF_100,color=population,shape=population)) +
+  facet_wrap(~CHROM, scales = "free_x",ncol=2) +
+  #geom_point(alpha=.1) +
+  geom_line()
+plA
+```
+
+
+plot!
+```{r}
+plC.data <- pl.data2 %>% filter(str_detect(CHROM,"chrC"),!str_detect(CHROM,"random")) 
+```
+
+```{r}
+plC <- ggplot(plC.data,aes(x=POS,y=AF_100,color=population,shape=population)) +
+  facet_wrap(~CHROM, scales = "free_x",ncol=2) +
+  #geom_point(alpha=.1) +
+  geom_line()
+plC
+```
+
+plot one per chromosome
+```{r}
+plAll.data <- pl.data2  %>% filter(!str_detect(CHROM,"random")) 
+```
+
+```{r}
+for (chr in unique(plAll.data$CHROM)) {
+  plAll.data %>% filter(str_detect(CHROM,chr)) %>%
+    ggplot(aes(x=POS,y=AF_100,color=population)) +
+    geom_line() +
+    ggtitle(chr) +
+    ylim(0,1)
+  ggsave(str_c(chr,".png"))
+}
+  
+```
+
+
