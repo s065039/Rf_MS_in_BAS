@@ -102,9 +102,6 @@ summary(data$QUAL_converted)
 ```
 
 
-
-#filter data to reduce to relevant SNPs
-
 #S95 & S96 coverage
 ```{r}
 summary(data$S96_read.depth)
@@ -114,131 +111,30 @@ qplot(data$S96_read.depth,geom="histogram") + xlim(0,100)
 summary(data$S95_read.depth)
 qplot(data$S95_read.depth,geom="histogram") + scale_x_log10()
 qplot(data$S95_read.depth,geom="histogram") + xlim(0,100)
-
-
-
-data.small <- data[data$S95_read.depth > 0 & data$S95_read.depth < 100 ,] 
-data.small <- data.small[data.small$S96_read.depth > 0 & data.small$S96_read.depth < 100 ,] 
-#return only 0 < read depth < 200 in both S95 & S96
-```
-
-```{r}
-data.small <- data.small[grepl("1/1",data.small$S96_gt),] #Focus on places where S96 is homozygous different from S95
-data.small <- data.small[grepl("0/0",data.small$S95_gt),] #return genotype 1/1 in S96 & 0/0 in S95 of SNPs
-# -> 454 observations only!
-qplot(data.small$S96_percent.alt,geom="histogram")
-
-data.small <- data.small[data.small$S96_percent.alt>90,] #focus on SNPs where we are confident that S96 is different from S95 -> 39 obervations only!
-summary(data.small)
-```
-
-#checkout the quality
-```{r}
-summary(data.small$QUAL)
-qplot(data.small$QUAL,geom="histogram") 
-
-summary(data.small$QUAL_converted)
-qplot(data.small$QUAL_converted,geom="histogram") 
-```
-
-#instead of using a smoothed line, compute running average.  The reason is that 
-#smoothed lines are overly influenced by the SNP density
-```{r}
-data.small$S96.percent.run10 <- caTools::runmean(data.small$S96_percent.alt,10)
-#data.small$S96.percent.run15 <- caTools::runmean(data.small$S96.percent.alt,15)
-
-#data.small <- data.small[data.small$CHROM!="SL2.40ch00",]
 ```
 
 
-##plot 
+#Compare the alt. allele frequency between S96 & S95
 ```{r}
-plotSnp <- function(start=NULL,finish=NULL,data=data.small,title=NULL,alpha=0.5,chrom=NULL) {
-  if(! is.null(chrom)) {
-    data <- data[data.small$CHROM==chrom,]
-  }
-  pl <- ggplot(data=data,mapping=aes(x=POS/1e6))
-  pl <- pl + geom_point(aes(y=S96_percent.alt),alpha=alpha)
-  if(!is.null(start) & ! is.null(finish)) {
-    pl <- pl + xlim(c(start,finish))
-    #pl <- pl + scale_size_discrete(range=c(2,6))
-  }
-  if(!is.null(title)) {
-    pl <- pl + ggtitle(title)
-  }
-  if(is.null(chrom)) {
-    pl <- pl + facet_wrap(~ CHROM, ncol = 2)
-    #pl <- pl + geom_smooth(aes(y=S96_percent.alt),color="skyblue",lwd=1) + ylim(0,100)
-}
-  pl <- pl + ylab("Percent S96") + xlab("Position (Mbp)")
-  pl <- pl + theme_bw()
-  pl <- pl + theme(axis.text = element_text(size=10))
-  pl <- pl + theme(axis.title = element_text(size=12))
-  print(pl)
+chr_names <- read.csv("chromosome_names.txt", header=FALSE)
+chr_names$V1 <- as.character(chr_names$V1)
+chr_names <- unlist(chr_names)
+
+data1 <- data %>% 
+          select(CHROM, POS, S96_alt.depth, S95_alt.depth) 
+
+# return a graph by chromosome
+for (chrom in chr_names) {
+   data2 <- data1 %>% filter(CHROM == chrom)
+   ggplot(data=data2) +
+      geom_smooth(aes(x=POS,y=S96_alt.depth), color="blue") +
+      geom_smooth(aes(x=POS,y=S95_alt.depth), color="red") +
+      ggtitle(paste0("alt. allele frequency in ",chrom)) + 
+      xlab("POS") + ylab("alt. allele freq.")
+   ggsave(filename = paste0(chrom,".plot.png"),device = "png",path = "plots")
 }
 ```
 
-```{r}
-plotSnp(title="Rf and MS BSA Analysis")
-ggsave("Rf_MS_BSA_All_Chroms.pdf",height=11,width=8.5)
-ggsave("Rf_MS_BSA_All_Chroms.tiff",height=10,width=6.6)
-#possibly  chrC09, chrC03 and chrA05!
 
-plotSnp(title="Rf_MS_BSA Analysis ChrC09",chrom="chrC09") #possibly 47.1-47.7
-ggsave("Rf_MS_BSA_Ch09.pdf",width=8.5,height=2)
 
-plotSnp(47.49,47.51,title="ChrC09 Enlargement1",chrom="chrC09") #possibly 47.49-47.51
-ggsave("Rf_MS_BSA_chrC09_enlargement1.pdf",width=8.5,height=2)
 
-plotSnp(47.48,47.50,title="ChrC09 Enlargement2",chrom="chrC09") #possibly 47.48-47.50 & 47.2-47.24
-ggsave("Rf_MS_BSA_chrC09_enlargement2.pdf",width=8.5,height=2)
-
-```
-
-#get nearby genes.?????? not done yet!!
-```{r}
-installed.packages("rtracklayer")
-library(rtracklayer)
-installed.packages("GenomicRanges")
-library(GenomicRanges)
-library(IRanges)
-library(stringr)
-```
-#unfortunately there are errors in the ITAG2.3 file so I can't use import.gff3()
-```{r}
-genes <- read.delim("Brassica_napus.annotation_v5_modified_modified.gff3", sep="\t", comment.char="#", as.is=T,header=F)
-
-head(genes)
-
-colnames(genes) <- c("seqid","source","type","start","end","score","strand","phase","attributes")
-head(genes)
-
-genes <- genes[genes$type=="gene",]
-
-genes$locus <- regmatches(genes$attributes,regexpr("Solyc[01][0-9]g[0-9]{6}",genes$attributes))
-
-head(genes)
-
-genes.rd <- RangedData(IRanges(start=genes$start, end=genes$end, names=genes$locus),space=genes$seqid)
-
-head(genes.rd)
-
-#make it a ranged data object
-
-region1.rd <- RangedData(IRanges(start=3.45e07,end=3.55e07,names="tie1Region1"),space="SL2.40ch02")
-region1.rd
-
-region2.rd <- RangedData(IRanges(start=3.85e07,end=3.95e07,names="tie1Region2"),space="SL2.40ch02")
-
-overlaps1 <- as.data.frame(as.matrix(findOverlaps(ranges(region1.rd),ranges(genes.rd))))
-
-head(overlaps1)
-overlaps2 <- as.data.frame(as.matrix(findOverlaps(ranges(region2.rd),ranges(genes.rd))))
-
-overlaps1$locus <- genes$locus[overlaps1$subjectHits]
-
-overlaps2$locus <- genes$locus[overlaps2$subjectHits]
-
-write.csv(overlaps1,"tie1Overlaps1.csv")
-write.csv(overlaps2,"tie1Overlaps2.csv")
-```
