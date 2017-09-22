@@ -136,3 +136,74 @@ ggplot(data3, aes(x=S96_DP)) + geom_histogram()
 
 ```
 
+
+## Try filtering for F2 good snps
+
+```{r}
+F2snps <- read_tsv("Final_F2_SNP_Sites.tab")
+```
+
+```{r}
+data2.F2.filtered <- semi_join(data2,F2snps)
+
+dim(data2)
+dim(F2snps)
+dim(data2.F2.filtered)
+```
+
+```{r}
+data3.F2 <- data2.F2.filtered %>%
+  group_by(CHROM) %>%
+  mutate(abs_delta_af = abs(S95_AO/S95_DP - S96_AO/S96_DP),
+         abs_delta_af_10=roll_mean(abs_delta_af,n=10,fill=NaN)
+         )
+data3.F2
+```
+
+```{r}
+for (chr in chrom.names) {
+  data3.F2 %>% filter(str_detect(CHROM,chr)) %>%
+    ggplot(aes(x=POS,y=abs_delta_af_10)) +
+    geom_line() +
+    ggtitle(chr) +
+    ylim(0,1)
+  ggsave(str_c("Delta_af_F2_filter",chr,".png"),height = 8, width = 12)
+}
+```
+
+## filter on 505
+
+```{r}
+snps.505 <- read_csv("../kiat/Breeding_Prediction_App/Data/505/505_Genotype_170K_SNPs.csv.gz") %>%
+  select(CHROM,POS)
+head(snps.505)
+```
+
+```{r}
+data2.505.filtered <- semi_join(data2,snps.505)
+
+dim(data2)
+dim(snps.505)
+dim(data2.505.filtered)
+```
+
+```{r}
+data3.505 <- data2.505.filtered %>%
+  group_by(CHROM) %>%
+  mutate(abs_delta_af = abs(S95_AO/S95_DP - S96_AO/S96_DP),
+         abs_delta_af_10=roll_mean(abs_delta_af,n=10,fill=NaN)
+         )
+data3.505
+```
+
+```{r}
+for (chr in chrom.names) {
+  data3.505 %>% filter(str_detect(CHROM,chr)) %>%
+    ggplot(aes(x=POS,y=abs_delta_af_10)) +
+    geom_point(aes(y=abs_delta_af),shape=1) +
+    geom_line(color="blue") +
+    ggtitle(chr) +
+    ylim(0,1)
+  ggsave(str_c("Delta_af_505_filter",chr,".png"),height = 8, width = 12)
+}
+```
