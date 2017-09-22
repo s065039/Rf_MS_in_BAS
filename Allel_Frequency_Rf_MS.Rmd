@@ -134,7 +134,44 @@ for (chrom in chr_names) {
    ggsave(filename = paste0(chrom,".plot.png"),device = "png",path = "plots")
 }
 ```
+# get nearby genes
+```{r}
+library(rtracklayer)
+library(IRanges)
+library(stringr)
+```
+
+# annotation file
+```{r}
+genes <- read.delim("Brassica_napus.annotation_v5_modified_modified.gff3", sep="\t", comment.char="#", as.is=T, header=F) 
+head(genes)
+colnames(genes) <- c("chromosome","source","type","start","end","score","strand","phase","attributes")
+head(genes)       
+
+genes <- genes %>% filter(type=="mRNA")
+genes$locus <- sub(pattern = "ID=", "", sub(pattern = ";.*", replacement = "", x = genes$attributes))
+head(genes)
+
+genes.rd <- RangedData(IRanges(start=genes$start, end=genes$end,names=genes$locus),space=genes$chromosome)
+
+head(genes.rd)
+```
+
+#make it a ranged data object
 
 
+```{r}
+region1.rd <- RangedData(IRanges(start=4.30e07,end=4.40e07,names="Region1"),space="chrC09")
+region1.rd
+```
+
+```{r}
+overlaps1 <- as.data.frame(as.matrix(findOverlaps(ranges(region1.rd),ranges(genes.rd))))
+head(overlaps1)
+
+overlaps1$locus <- genes$locus[overlaps1$subjectHits]
+
+write.csv(overlaps1,"overlaps1.csv")
+```
 
 
