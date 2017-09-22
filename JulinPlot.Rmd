@@ -200,8 +200,8 @@ data3.505
 for (chr in chrom.names) {
   data3.505 %>% filter(str_detect(CHROM,chr)) %>%
     ggplot(aes(x=POS,y=abs_delta_af_10)) +
-    geom_point(aes(y=abs_delta_af)) +
-    geom_line() +
+    geom_point(aes(y=abs_delta_af),shape=1) +
+    geom_line(color="blue") +
     ggtitle(chr) +
     ylim(0,1)
   ggsave(str_c("Delta_af_505_filter",chr,".png"),height = 8, width = 12)
