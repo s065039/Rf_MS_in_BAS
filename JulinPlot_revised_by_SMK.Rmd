@@ -1,0 +1,296 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(vcfR)
+library(stringr)
+library(RcppRoll)
+```
+
+### pre-processing
+
+##### read .vcf file of SNP calling and reorganize it 
+```{r}
+cnames <- str_split("CHROM  POS     ID      REF     ALT     QUAL    FILTER  INFO    FORMAT  S95     S96",pattern=boundary("word"))[[1]]
+
+data <- read_tsv("S95S96_filtered.vcf.recode.vcf",comment="#",col_names = cnames)
+data
+```
+##### reorganize and filter
+```{r}
+format.names <- str_split(data$FORMAT[[1]],pattern=":")[[1]]
+
+data2 <- data %>%
+  select(-INFO,-ID,-FILTER, -FORMAT) %>%
+  mutate(S95=str_replace_all(S95,"([^0-9]|$)\\.","\\1NA")) %>% # convert missing data "." into NA
+  mutate(S96=str_replace_all(S96,"([^0-9]|$)\\.","\\1NA")) %>%
+  separate(S95,sep=":",into = str_c("S95_",format.names), convert = TRUE) %>%
+  separate(S96,sep=":",into=str_c("S96_",format.names), convert = TRUE) %>%
+  filter(!(S95_GT=="1/1" & S96_GT=="1/1")) %>%
+  filter(!(S95_GT=="0/0" & S96_GT=="0/0")) %>% #remove the data with the same genotype of homozygosity between the two pools
+  select(-ends_with("DPR"))
+data2
+```
+
+### calculate allele frequencies and polarize based on the MS pool
+
+##### for each SNP 
+```{r}
+data2 <- data2 %>%
+  mutate(S95_alt_AF=S95_AO/S95_DP,
+         S96_alt_AF=S96_AO/S96_DP,
+         S95_alt_major=S95_alt_AF > 0.5)
+data2 <- data2 %>%
+  mutate(S95_AF_polar=ifelse(S95_alt_major,S95_alt_AF,1-S95_alt_AF),
+         S96_AF_polar=ifelse(S95_alt_major,S96_alt_AF,1-S96_alt_AF))
+data2         
+```
+
+##### rolling mean(moving average)
+to create a series of average values of different subsets of the full data set. a moving average can smooth out the noise of random outliers and emphasize long-term trends. 
+```{r}
+pl.data2 <- data2 %>%
+  gather(key="population",value="allele.frequency",S95_AF_polar,S96_AF_polar) %>%
+  arrange(CHROM,POS) %>%
+  group_by(population,CHROM) %>%
+  mutate(AF_100=roll_mean(allele.frequency,n=100,fill=NaN))
+pl.data2
+```
+
+
+plot!
+```{r}
+plA.data <- pl.data2 %>% filter(str_detect(CHROM,"chrA"),!str_detect(CHROM,"random")) 
+plA <- ggplot(plA.data,aes(x=POS,y=AF_100,color=population,shape=population)) +
+  facet_wrap(~CHROM, scales = "free_x",ncol=2) +
+  #geom_point(alpha=.1) +
+  geom_line()
+plA
+```
+
+
+plot!
+```{r}
+plC.data <- pl.data2 %>% filter(str_detect(CHROM,"chrC"),!str_detect(CHROM,"random"))
+
+plC <- ggplot(plC.data,aes(x=POS,y=AF_100,color=population,shape=population)) +
+  facet_wrap(~CHROM, scales = "free_x",ncol=2) +
+  #geom_point(alpha=.1) +
+  geom_line()
+plC
+```
+
+
+plot one per chromosome
+```{r}
+chrom.names <- unique(pl.data2$CHROM) %>% str_subset("[0-9]$")
+chrom.names
+```
+
+```{r}
+for (chr in chrom.names) {
+  pl.data2 %>% filter(str_detect(CHROM,chr)) %>%
+    ggplot(aes(x=POS,y=AF_100,color=population)) +
+    geom_line() +
+    ggtitle(chr) +
+    ylim(0,1)
+  ggsave(str_c(chr,".png"),height = 8, width = 12)
+}
+```
+
+
+### absolute difference in allele frequency
+
+```{r}
+data3 <- data2 %>%
+  group_by(CHROM) %>%
+  mutate(abs_delta_af = abs(S95_AO/S95_DP - S96_AO/S96_DP),
+         abs_delta_af_100=roll_mean(abs_delta_af,n=100,fill=NaN),
+         abs_delta_af_500=roll_mean(abs_delta_af,n=500,fill=NaN)
+         )
+data3
+```
+
+plot one per chromosome
+```{r}
+for (chr in chrom.names) {
+  data3 %>% filter(str_detect(CHROM,chr)) %>%
+    ggplot(aes(x=POS,y=abs_delta_af_100)) +
+    geom_line() +
+    ggtitle(chr) +
+    ylim(0,1)
+  ggsave(str_c("Delta_af",chr,".png"),height = 8, width = 12)
+}
+```
+
+```{r}
+ggplot(data3, aes(x=S95_DP)) + geom_histogram()
+ggplot(data3, aes(x=S96_DP)) + geom_histogram()
+```
+
+
+## Try filtering for F2 good snps
+
+```{r message=FALSE}
+F2snps <- read_tsv("Final_F2_SNP_Sites.tab")
+```
+
+```{r message=FALSE}
+data2.F2.filtered <- semi_join(data2,F2snps)
+
+dim(data2)
+dim(F2snps)
+dim(data2.F2.filtered)
+```
+
+```{r}
+data3.F2 <- data2.F2.filtered %>%
+  group_by(CHROM) %>%
+  mutate(abs_delta_af = abs(S95_AO/S95_DP - S96_AO/S96_DP),
+         abs_delta_af_10=roll_mean(abs_delta_af,n=10,fill=NaN)
+         )
+data3.F2
+```
+
+```{r}
+for (chr in chrom.names) {
+  data3.F2 %>% filter(str_detect(CHROM,chr)) %>%
+    ggplot(aes(x=POS,y=abs_delta_af_10)) +
+    geom_line() +
+    ggtitle(chr) +
+    ylim(0,1)
+  ggsave(str_c("Delta_af_F2_filter",chr,".png"),height = 8, width = 12)
+}
+```
+
+## filter on 505
+
+```{r}
+snps.505 <- read_csv("505_Genotype_170K_SNPs.csv.gz") %>%
+  select(CHROM,POS)
+head(snps.505)
+```
+
+```{r}
+data2.505.filtered <- semi_join(data2,snps.505) #return all rows from data2 where there are matching values in snp.505
+
+dim(data2)
+dim(snps.505)
+dim(data2.505.filtered)
+```
+
+```{r}
+data3.505 <- data2.505.filtered %>%
+  group_by(CHROM) %>%
+  mutate(abs_delta_af = abs(S95_AO/S95_DP - S96_AO/S96_DP),
+         abs_delta_af_10=roll_mean(abs_delta_af,n=10,fill=NaN)
+         )
+data3.505
+```
+
+##### abs diff of allele freq along entire genome
+```{r}
+  data3.505 %>% filter(!grepl("random", CHROM)) %>%
+    ggplot(aes(x=POS,y=abs_delta_af_10,group=CHROM,color=CHROM)) +
+    geom_point() +
+    geom_line() +
+    ggtitle("absolute diff. of allele freq. between Rf and MS pool") +
+    ylim(0,1)
+  ggsave("Delta_af_505_filter_entire_genome.png", width = 16, height = 20, device = "png")
+```
+We pick chr09 and will focus on it!
+
+##### abs diff of allele freq by chromosome
+```{r}
+for (chr in chrom.names) {
+  data3.505 %>% filter(str_detect(CHROM,chr)) %>%
+    ggplot(aes(x=POS,y=abs_delta_af_10)) +
+    geom_point(aes(y=abs_delta_af),shape=1) +
+    geom_line(color="blue") +
+    ggtitle(chr) +
+    ylim(0,1)
+  ggsave(str_c("Delta_af_505_filter",chr,".png"),height = 8, width = 12)
+}
+```
+
+
+### get nearby genes
+```{r}
+library(rtracklayer)
+library(IRanges)
+library(stringr)
+```
+
+#####  set up genomic info by interval from annotation file
+```{r}
+# B.nupus annotation file
+genes <- read.delim("Brassica_napus.annotation_v5_modified_modified.gff3", sep="\t", comment.char="#", as.is=T, header=F) 
+head(genes)
+colnames(genes) <- c("chromosome","source","type","start","end","score","strand","phase","attributes")
+head(genes)       
+
+#set up genomic information by interval
+genes <- genes %>% filter(type=="mRNA")
+genes$locus <- sub(pattern = "ID=", "", sub(pattern = ";.*", replacement = "", x = genes$attributes))
+head(genes)
+
+genes.rd <- RangedData(IRanges(start=genes$start, end=genes$end, names=genes$locus), space=genes$chromosome)
+
+head(genes.rd)
+```
+
+##### make it a ranged data object at chrC09
+```{r}
+region1.rd <- RangedData(IRanges(start=4.371e07,end=4.372e07,names="Region1"),space="chrC09") 
+region1.rd 
+
+overlaps1_4.371_4.372 <- as.data.frame(as.matrix(findOverlaps(ranges(region1.rd),ranges(genes.rd))))
+nrow(overlaps1_4.371_4.372) #1,420 hits
+
+overlaps1_4.371_4.372$locus <- genes$locus[overlaps1_4.371_4.372$subjectHits]
+
+write.csv(overlaps1_4.371_4.372,"overlaps1_4.371_4.372.csv")
+```
+
+
+##### matching annotation of B.napus vs. A.thaliana's annotation
+```{r message=FALSE}
+napus_vs_ara <- read.table("napus_vs_ara.non_reciprocal.table") #matches of gene functions between B.napus and Ara 
+```
+
+position 4E7-5E7 on chrC09
+```{r}
+overlaps1_4_5 <- read.csv("overlaps1_4_5.csv")
+a <- overlaps1_4_5 %>%
+  mutate(napus_ID=locus) %>% select(subjectHits, napus_ID)  
+overlaps1_4_5_match_ara <- semi_join(napus_vs_ara, a, by="napus_ID")
+overlaps1_4_5_match_ara #934 hits
+```
+
+position 4.35E7-4.38E7 on chrC09
+```{r}
+overlaps1_4.35_4.38 <- read.csv("overlaps1_4.35_4.38.csv")
+b <- overlaps1_4.35_4.38 %>%
+  mutate(napus_ID=locus) %>% select(subjectHits, napus_ID)  
+overlaps1_4.35_4.38_match_ara <- semi_join(napus_vs_ara, b, by="napus_ID")
+overlaps1_4.35_4.38_match_ara #24 hits
+```
+
+position 4.370E7-4.373E7 on chrC09
+```{r}
+overlaps1_4.370_4.373 <- read.csv("overlaps1_4.370_4.373.csv")
+b <- overlaps1_4.370_4.373 %>%
+  mutate(napus_ID=locus) %>% select(subjectHits, napus_ID)  
+overlaps1_4.370_4.373_match_ara <- semi_join(napus_vs_ara, b, by="napus_ID")
+overlaps1_4.370_4.373_match_ara #1 hit
+```
+
+[BnaC08g07750D AT2G38670.1 phosphorylethanolamine cytidylyltransferase 1] (https://www.arabidopsis.org/servlets/TairObject?id=35231&type=locus)
+
+[AT1G32700 PLATZ transcription factor family protein](https://www.arabidopsis.org/servlets/TairObject?type=locus&name=At1g32700)
+
+
+
